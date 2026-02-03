@@ -46,8 +46,10 @@ Vosk works best with:
 	•	PCM WAV (not AAC/ALAC inside a .wav container, and not WAV_EXTENSIBLE)
 
 If your file fails with errors like file does not start with RIFF id or unknown format: 65534,
-convert it with FFmpeg:  ffmpeg -i input.wav -ac 1 -ar 16000 -c:a pcm_s16le output.wav
-
+convert it with FFmpeg:  
+```
+ffmpeg -i input.wav -ac 1 -ar 16000 -c:a pcm_s16le output.wav
+```
 Notes
 	•	models/ (Vosk model) and samples/ (audio test files) are excluded from Git via .gitignore.
 	•	If you want to test audio files, create a local samples/ folder and keep it untracked.
