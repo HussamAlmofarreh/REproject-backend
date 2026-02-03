@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Audio samples
+samples/
+*.wav
+
+# Vosk models
+models/vosk-model*/
+
+# Environment / misc
+.env
+.DS_Store
