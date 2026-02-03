@@ -34,7 +34,7 @@ uvicorn server:app --reload
 
 6. Testing with the provided client
 ```
-python client.py path/to/audio.wav --pretty
+python client.py samples/sample.wav --pretty
 ```
 
 
