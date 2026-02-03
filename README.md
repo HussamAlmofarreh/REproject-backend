@@ -1,4 +1,4 @@
-# reproject-backend
+# REproject-backend
 
 ## Speech-to-Text (FastAPI + Vosk)
 
@@ -28,12 +28,14 @@ Download an English model from Vosk and place it inside the models/ folder.
 Note: Models are large and are not committed to the repo.
 
 5.	Run the server
+```
 uvicorn server:app --reload
+```
 
-
-Testing with the provided client
-Run: python client.py path/to/audio.wav --pretty
-
+6. Testing with the provided client
+```
+python client.py path/to/audio.wav --pretty
+```
 
 
 WAV format requirements (important)
@@ -49,4 +51,4 @@ convert it with FFmpeg:  ffmpeg -i input.wav -ac 1 -ar 16000 -c:a pcm_s16le outp
 Notes
 	•	models/ (Vosk model) and samples/ (audio test files) are excluded from Git via .gitignore.
 	•	If you want to test audio files, create a local samples/ folder and keep it untracked.
-```
+
