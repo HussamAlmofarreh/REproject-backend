@@ -7,6 +7,9 @@ import io
 from uuid import uuid4
 from datetime import datetime, timezone
 from threading import Lock
+from nlu.intent_recognizer import recognize_intent
+from preprocess import preprocess_audio
+
 
 app = FastAPI()
 
@@ -60,6 +63,10 @@ async def stt(audio: UploadFile = File(...)):
     t_pre_end = t0  # preprocessing not implemented yet
     t_stt_end = t0
 
+    intent = "UNKNOWN"
+    slots = {}
+    nlu_confidence = 0.0
+
     try:
         audio_bytes = await audio.read()
 
@@ -90,9 +97,7 @@ async def stt(audio: UploadFile = File(...)):
             raise ValueError("too_long")
 
         t_validate_end = time.perf_counter()
-
-        # ---- preprocessing placeholder (your teammate will add later)
-        # audio_bytes = preprocess_audio(audio_bytes)
+        audio_bytes = preprocess_audio(audio_bytes)
         t_pre_end = time.perf_counter()
 
         # ---- STT
@@ -125,6 +130,11 @@ async def stt(audio: UploadFile = File(...)):
         stt_confidence = (sum(word_confs) / len(word_confs)
                           ) if word_confs else 0.0
 
+        nlu_result = recognize_intent(transcript)
+        intent = nlu_result["intent"]
+        slots = nlu_result["slots"]
+        nlu_confidence = nlu_result["confidence"]
+
         t_stt_end = time.perf_counter()
 
     except ValueError as e:
@@ -155,6 +165,9 @@ async def stt(audio: UploadFile = File(...)):
         "duration_ms": duration_ms,
         "transcript": transcript if status == "ok" else "",
         "stt_confidence": round(stt_confidence, 4) if status == "ok" else 0.0,
+        "intent": intent if status == "ok" else "UNKNOWN",
+        "slots": slots if status == "ok" else {},
+        "nlu_confidence": nlu_confidence if status == "ok" else 0.0,
         "latency_ms": latency_ms,
         "errors": errors,
     }
