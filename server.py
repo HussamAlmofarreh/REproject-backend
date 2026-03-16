@@ -10,6 +10,8 @@ from threading import Lock
 from nlu.intent_recognizer import recognize_intent
 from preprocess import preprocess_audio
 
+# Temporary, until we connect to cloud API
+CLOUD_AVAILABLE = False
 
 app = FastAPI()
 
@@ -66,6 +68,10 @@ async def stt(audio: UploadFile = File(...)):
     intent = "UNKNOWN"
     slots = {}
     nlu_confidence = 0.0
+    cloud_fallback = False
+    mode = "local"
+
+    response_text = ""
 
     try:
         audio_bytes = await audio.read()
@@ -129,13 +135,32 @@ async def stt(audio: UploadFile = File(...)):
         transcript = transcript.strip()
         stt_confidence = (sum(word_confs) / len(word_confs)
                           ) if word_confs else 0.0
+        t_stt_end = time.perf_counter()
 
         nlu_result = recognize_intent(transcript)
         intent = nlu_result["intent"]
         slots = nlu_result["slots"]
         nlu_confidence = nlu_result["confidence"]
+        # fallback decision logic
+        FALLBACK_STT_THRESHOLD = 0.6
+        FALLBACK_NLU_THRESHOLD = 0.5
+        if (
+            intent == "UNKNOWN"
+            or stt_confidence < FALLBACK_STT_THRESHOLD
+            or nlu_confidence < FALLBACK_NLU_THRESHOLD
+        ):
+            cloud_fallback = True
+            if CLOUD_AVAILABLE:
+                mode = "cloud"
+            else:
+                mode = "degraded"
 
-        t_stt_end = time.perf_counter()
+        if mode == "degraded":
+            response_text = "I didn't catch that clearly. Could you repeat?"
+        elif intent == "UNKNOWN":
+            response_text = "Sorry, I didn't understand that."
+        else:
+            response_text = ""
 
     except ValueError as e:
         status = "error"
@@ -159,17 +184,38 @@ async def stt(audio: UploadFile = File(...)):
     }
 
     response = {
-        "request_id": request_id,
-        "status": status,
-        "filename": audio.filename,
-        "duration_ms": duration_ms,
-        "transcript": transcript if status == "ok" else "",
-        "stt_confidence": round(stt_confidence, 4) if status == "ok" else 0.0,
-        "intent": intent if status == "ok" else "UNKNOWN",
-        "slots": slots if status == "ok" else {},
-        "nlu_confidence": nlu_confidence if status == "ok" else 0.0,
+        "request": {
+            "id": request_id,
+            "status": status,
+            "filename": audio.filename
+        },
+
+        "audio": {
+            "duration_ms": duration_ms
+        },
+
+        "stt": {
+            "transcript": transcript,
+            "confidence": round(stt_confidence, 4)
+        },
+
+        "nlu": {
+            "intent": intent,
+            "confidence": nlu_confidence,
+            "slots": slots
+        },
+
+        "system": {
+            "mode": mode,
+            "cloud_fallback": cloud_fallback,
+            "response_text": response_text
+        },
+
         "latency_ms": latency_ms,
-        "errors": errors,
+
+        "errors": errors
+
+
     }
 
     # ---- metadata logging (privacy-aware)
