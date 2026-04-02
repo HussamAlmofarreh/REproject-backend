@@ -4,7 +4,6 @@ import wave
 import json
 import time
 import io
-import traceback
 from uuid import uuid4
 from datetime import datetime, timezone
 from threading import Lock
@@ -21,13 +20,13 @@ MODEL_PATH = "models/vosk-model-small-en-us-0.15"
 model = Model(MODEL_PATH)
 
 # ======== Settings ========
-MAX_BYTES = 5 * 1024 * 1024       # 5 MB
-MAX_DURATION_MS = 10_000          # 10 seconds
+MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+MAX_DURATION_MS = 10_000  # 10 seconds
 REQUIRED_SR = 16_000
 REQUIRED_CHANNELS = 1
-REQUIRED_SAMPWIDTH = 2            # 16-bit PCM
+REQUIRED_SAMPWIDTH = 2  # 16-bit PCM
 LOG_PATH = "logs.jsonl"
-LOG_TRANSCRIPT = False            # privacy: off by default
+LOG_TRANSCRIPT = False  # privacy: off by default
 
 _lock = Lock()
 
@@ -109,7 +108,6 @@ async def stt(audio: UploadFile = File(...)):
             wf = wave.open(io.BytesIO(audio_bytes), "rb")
         except wave.Error:
             raise ValueError("preprocess_invalid_wav")
-
         sr = wf.getframerate()
 
         # ---- STT
@@ -128,23 +126,16 @@ async def stt(audio: UploadFile = File(...)):
                 transcript += result.get("text", "") + " "
 
                 if "result" in result:
-                    word_confs.extend(
-                        [w.get("conf", 0.0) for w in result["result"]]
-                    )
+                    word_confs.extend([w.get("conf", 0.0) for w in result["result"]])
 
         final_result = json.loads(rec.FinalResult())
         transcript += final_result.get("text", "")
 
         if "result" in final_result:
-            word_confs.extend(
-                [w.get("conf", 0.0) for w in final_result["result"]]
-            )
+            word_confs.extend([w.get("conf", 0.0) for w in final_result["result"]])
 
         transcript = transcript.strip()
-        stt_confidence = (
-            sum(word_confs) / len(word_confs)
-            if word_confs else 0.0
-        )
+        stt_confidence = sum(word_confs) / len(word_confs) if word_confs else 0.0
         t_stt_end = time.perf_counter()
 
         # ---- NLU
@@ -189,13 +180,11 @@ async def stt(audio: UploadFile = File(...)):
 
     except Exception as e:
         status = "error"
-        errors.append(f"internal_error: {str(e)}")
+        errors.append("internal_error")
         t_stt_end = time.perf_counter()
         print("UNEXPECTED ERROR:", repr(e))
-        traceback.print_exc()
 
     t_end = time.perf_counter()
-
     latency_ms = {
         "validate": round((t_validate_end - t0) * 1000, 2),
         "preprocess": round((t_pre_end - t_validate_end) * 1000, 2),
