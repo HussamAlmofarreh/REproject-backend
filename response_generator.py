@@ -42,7 +42,8 @@ def generate_response(nlu_result, policy_action):
         device = slots.get("device", "")
 
         if action and device:
-            return f"{action.capitalize()} the {device}."
+            pretty_action = action.replace("_", " ")
+            return f"{pretty_action.capitalize()} the {device}."
 
         return "Controlling device."
 

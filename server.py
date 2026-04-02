@@ -4,11 +4,13 @@ import wave
 import json
 import time
 import io
+import traceback
 from uuid import uuid4
 from datetime import datetime, timezone
 from threading import Lock
 from nlu.intent_recognizer import recognize_intent
 from preprocess import preprocess_audio
+from response_generator import process_nlu_result
 
 # Temporary, until we connect to cloud API
 CLOUD_AVAILABLE = False
@@ -43,13 +45,6 @@ def log_event(event: dict) -> None:
             f.write(line + "\n")
 
 
-def extract_confidence(vosk_result: dict) -> float:
-    words = vosk_result.get("result", [])
-    if not words:
-        return 0.0
-    return sum(w.get("conf", 0.0) for w in words) / max(len(words), 1)
-
-
 @app.post("/stt")
 async def stt(audio: UploadFile = File(...)):
     request_id = str(uuid4())
@@ -62,7 +57,7 @@ async def stt(audio: UploadFile = File(...)):
     status = "ok"
 
     t_validate_end = t0
-    t_pre_end = t0  # preprocessing not implemented yet
+    t_pre_end = t0
     t_stt_end = t0
 
     intent = "UNKNOWN"
@@ -71,6 +66,7 @@ async def stt(audio: UploadFile = File(...)):
     cloud_fallback = False
     mode = "local"
 
+    policy_action = ""
     response_text = ""
 
     try:
@@ -80,7 +76,7 @@ async def stt(audio: UploadFile = File(...)):
         if len(audio_bytes) > MAX_BYTES:
             raise ValueError("too_large")
 
-        # ---- open wav from memory (no temp file)
+        # ---- open WAV from memory for validation
         try:
             wf = wave.open(io.BytesIO(audio_bytes), "rb")
         except wave.Error:
@@ -103,8 +99,18 @@ async def stt(audio: UploadFile = File(...)):
             raise ValueError("too_long")
 
         t_validate_end = time.perf_counter()
-        audio_bytes = preprocess_audio(audio_bytes)
+
+        # ---- preprocessing
+        audio_bytes, sr = preprocess_audio(audio_bytes)
         t_pre_end = time.perf_counter()
+
+        # ---- reopen processed audio for STT
+        try:
+            wf = wave.open(io.BytesIO(audio_bytes), "rb")
+        except wave.Error:
+            raise ValueError("preprocess_invalid_wav")
+
+        sr = wf.getframerate()
 
         # ---- STT
         rec = KaldiRecognizer(model, sr)
@@ -120,47 +126,59 @@ async def stt(audio: UploadFile = File(...)):
             if rec.AcceptWaveform(data):
                 result = json.loads(rec.Result())
                 transcript += result.get("text", "") + " "
-                # collect confidence values if present
+
                 if "result" in result:
-                    word_confs.extend([w.get("conf", 0.0)
-                                      for w in result["result"]])
+                    word_confs.extend(
+                        [w.get("conf", 0.0) for w in result["result"]]
+                    )
 
         final_result = json.loads(rec.FinalResult())
         transcript += final_result.get("text", "")
 
         if "result" in final_result:
-            word_confs.extend([w.get("conf", 0.0)
-                              for w in final_result["result"]])
+            word_confs.extend(
+                [w.get("conf", 0.0) for w in final_result["result"]]
+            )
 
         transcript = transcript.strip()
-        stt_confidence = (sum(word_confs) / len(word_confs)
-                          ) if word_confs else 0.0
+        stt_confidence = (
+            sum(word_confs) / len(word_confs)
+            if word_confs else 0.0
+        )
         t_stt_end = time.perf_counter()
 
+        # ---- NLU
         nlu_result = recognize_intent(transcript)
         intent = nlu_result["intent"]
         slots = nlu_result["slots"]
         nlu_confidence = nlu_result["confidence"]
-        # fallback decision logic
+
+        # ---- policy gate + response generation
+        processed_nlu = process_nlu_result(nlu_result)
+        policy_action = processed_nlu["policy_action"]
+        response_text = processed_nlu["response_text"]
+
+        # ---- fallback decision logic
         FALLBACK_STT_THRESHOLD = 0.6
         FALLBACK_NLU_THRESHOLD = 0.5
+
         if (
             intent == "UNKNOWN"
             or stt_confidence < FALLBACK_STT_THRESHOLD
             or nlu_confidence < FALLBACK_NLU_THRESHOLD
         ):
             cloud_fallback = True
+
             if CLOUD_AVAILABLE:
                 mode = "cloud"
             else:
                 mode = "degraded"
 
+        # ---- degraded mode overrides normal response
         if mode == "degraded":
             response_text = "I didn't catch that clearly. Could you repeat?"
-        elif intent == "UNKNOWN":
+        elif intent == "UNKNOWN" and not response_text:
             response_text = "Sorry, I didn't understand that."
-        else:
-            response_text = ""
 
     except ValueError as e:
         status = "error"
@@ -169,10 +187,12 @@ async def stt(audio: UploadFile = File(...)):
         t_pre_end = t_validate_end
         t_stt_end = t_validate_end
 
-    except Exception:
+    except Exception as e:
         status = "error"
-        errors.append("internal_error")
+        errors.append(f"internal_error: {str(e)}")
         t_stt_end = time.perf_counter()
+        print("UNEXPECTED ERROR:", repr(e))
+        traceback.print_exc()
 
     t_end = time.perf_counter()
 
@@ -187,41 +207,36 @@ async def stt(audio: UploadFile = File(...)):
         "request": {
             "id": request_id,
             "status": status,
-            "filename": audio.filename
+            "filename": audio.filename,
         },
-
         "audio": {
-            "duration_ms": duration_ms
+            "duration_ms": duration_ms,
         },
-
         "stt": {
-            "transcript": transcript,
-            "confidence": round(stt_confidence, 4)
+            "transcript": transcript if status == "ok" else "",
+            "confidence": round(stt_confidence, 4) if status == "ok" else 0.0,
         },
-
         "nlu": {
-            "intent": intent,
-            "confidence": nlu_confidence,
-            "slots": slots
+            "intent": intent if status == "ok" else "UNKNOWN",
+            "confidence": nlu_confidence if status == "ok" else 0.0,
+            "slots": slots if status == "ok" else {},
         },
-
         "system": {
-            "mode": mode,
-            "cloud_fallback": cloud_fallback,
-            "response_text": response_text
+            "mode": mode if status == "ok" else "error",
+            "cloud_fallback": cloud_fallback if status == "ok" else False,
         },
-
+        "response_generator": {
+            "policy_action": policy_action if status == "ok" else "",
+            "response_text": response_text if status == "ok" else "",
+        },
         "latency_ms": latency_ms,
-
-        "errors": errors
-
-
+        "errors": errors,
     }
 
     # ---- metadata logging (privacy-aware)
-    log_record = dict(response)
-    if not LOG_TRANSCRIPT:
-        log_record.pop("transcript", None)
+    log_record = json.loads(json.dumps(response))
+    if not LOG_TRANSCRIPT and "stt" in log_record:
+        log_record["stt"].pop("transcript", None)
     log_event(log_record)
 
     return response
