@@ -145,7 +145,7 @@ async def stt(audio: UploadFile = File(...)):
         nlu_confidence = nlu_result["confidence"]
 
         # ---- policy gate + response generation
-        processed_nlu = process_nlu_result(nlu_result)
+        processed_nlu = process_nlu_result(nlu_result, stt_confidence)
         policy_action = processed_nlu["policy_action"]
         response_text = processed_nlu["response_text"]
 
